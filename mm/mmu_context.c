@@ -62,3 +62,23 @@ void unuse_mm(struct mm_struct *mm)
 	task_unlock(tsk);
 }
 EXPORT_SYMBOL_GPL(unuse_mm);
+
+void my_switch_mm(struct mm_struct *mm)
+{
+	struct task_struct *tsk = current;
+
+	task_lock(tsk);
+	temp_mm = tsk->active_mm;
+	if (temp_mm != mm) {
+		atomic_inc(&mm->mm_count);
+		tsk->active_mm = mm;
+	}
+	switch_mm(temp_mm, mm, NULL);
+	task_unlock(tsk);
+#ifdef finish_arch_post_lock_switch
+	finish_arch_post_lock_switch();
+#endif
+
+	if (temp_mm != mm)
+		mmdrop(temp_mm);
+}
