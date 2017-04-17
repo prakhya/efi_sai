@@ -55,6 +55,7 @@
 
 static struct efi efi_phys __initdata;
 static efi_system_table_t efi_systab __initdata;
+struct mm_struct *temp_mm = NULL;
 
 static efi_config_table_type_t arch_tables[] __initdata = {
 #ifdef CONFIG_X86_UV
