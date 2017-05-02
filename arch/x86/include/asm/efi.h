@@ -75,7 +75,9 @@ struct efi_scratch {
 	preempt_disable();						\
 	__kernel_fpu_begin();						\
 									\
-	my_switch_mm(&efi_mm);						\
+	if (!efi_enabled(EFI_OLD_MEMMAP)) {				\
+		my_switch_mm(&efi_mm);					\
+	}								\
 })
 
 #define arch_efi_call_virt(p, f, args...)				\
@@ -83,7 +85,9 @@ struct efi_scratch {
 
 #define arch_efi_call_virt_teardown()					\
 ({									\
-	my_switch_mm(temp_mm);						\
+	if (!efi_enabled(EFI_OLD_MEMMAP)) {				\
+		my_switch_mm(temp_mm);					\
+	}								\
 									\
 	__kernel_fpu_end();						\
 	preempt_enable();						\
