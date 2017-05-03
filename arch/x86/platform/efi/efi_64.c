@@ -566,17 +566,13 @@ efi_status_t efi_thunk_set_virtual_address_map(
 
 	efi_sync_low_kernel_mappings();
 	local_irq_save(flags);
-
-	efi_scratch.prev_cr3 = read_cr3();
-	write_cr3((unsigned long)efi_scratch.efi_pgt);
-	__flush_tlb_all();
+	my_switch_mm(&efi_mm);
 
 	func = (u32)(unsigned long)phys_set_virtual_address_map;
 	status = efi64_thunk(func, memory_map_size, descriptor_size,
 			     descriptor_version, virtual_map);
 
-	write_cr3(efi_scratch.prev_cr3);
-	__flush_tlb_all();
+	my_switch_mm(temp_mm);
 	local_irq_restore(flags);
 
 	return status;
