@@ -75,11 +75,8 @@ struct efi_scratch {
 	preempt_disable();						\
 	__kernel_fpu_begin();						\
 									\
-	if (efi_scratch.use_pgd) {					\
-		efi_scratch.prev_cr3 = read_cr3();			\
-		write_cr3((unsigned long)efi_scratch.efi_pgt);		\
-		__flush_tlb_all();					\
-	}								\
+	if (!efi_enabled(EFI_OLD_MEMMAP))				\
+		my_switch_mm(&efi_mm);					\
 })
 
 #define arch_efi_call_virt(p, f, args...)				\
@@ -87,10 +84,8 @@ struct efi_scratch {
 
 #define arch_efi_call_virt_teardown()					\
 ({									\
-	if (efi_scratch.use_pgd) {					\
-		write_cr3(efi_scratch.prev_cr3);			\
-		__flush_tlb_all();					\
-	}								\
+	if (!efi_enabled(EFI_OLD_MEMMAP))				\
+		my_switch_mm(temp_mm);					\
 									\
 	__kernel_fpu_end();						\
 	preempt_enable();						\

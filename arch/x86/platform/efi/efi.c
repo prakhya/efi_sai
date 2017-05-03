@@ -81,16 +81,29 @@ static efi_status_t __init phys_efi_set_virtual_address_map(
 	efi_memory_desc_t *virtual_map)
 {
 	efi_status_t status;
-	unsigned long flags;
+	unsigned long flags = 0;
 	union efi_saved_pgd saved_pgd;
+
+	if (!efi_enabled(EFI_OLD_MEMMAP) && IS_ENABLED(CONFIG_X86_64)) {
+		my_switch_mm(&efi_mm);
+		goto call;
+	}
 
 	saved_pgd = efi_call_phys_prolog();
 
 	/* Disable interrupts around EFI calls: */
 	local_irq_save(flags);
+
+call:
 	status = efi_call_phys(efi_phys.set_virtual_address_map,
 			       memory_map_size, descriptor_size,
 			       descriptor_version, virtual_map);
+
+	if (!efi_enabled(EFI_OLD_MEMMAP) && IS_ENABLED(CONFIG_X86_64)) {
+		my_switch_mm(temp_mm);
+		return status;
+	}
+
 	local_irq_restore(flags);
 
 	efi_call_phys_epilog(saved_pgd);

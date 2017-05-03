@@ -77,12 +77,6 @@ union efi_saved_pgd __init efi_call_phys_prolog(void)
 	int pgd;
 	int n_pgds;
 
-	if (!efi_enabled(EFI_OLD_MEMMAP)) {
-		saved_pgd.cr3 = read_cr3();
-		write_cr3((unsigned long)efi_scratch.efi_pgt);
-		goto out;
-	}
-
 	early_code_mapping_set_exec(1);
 
 	n_pgds = DIV_ROUND_UP((max_pfn << PAGE_SHIFT), PGDIR_SIZE);
@@ -94,7 +88,6 @@ union efi_saved_pgd __init efi_call_phys_prolog(void)
 		vaddress = (unsigned long)__va(pgd * PGDIR_SIZE);
 		set_pgd(pgd_offset_k(pgd * PGDIR_SIZE), *pgd_offset_k(vaddress));
 	}
-out:
 	__flush_tlb_all();
 
 	return saved_pgd;
@@ -107,12 +100,6 @@ void __init efi_call_phys_epilog(union efi_saved_pgd saved_pgd)
 	 */
 	int pgd_idx;
 	int nr_pgds;
-
-	if (!efi_enabled(EFI_OLD_MEMMAP)) {
-		write_cr3(saved_pgd.cr3);
-		__flush_tlb_all();
-		return;
-	}
 
 	nr_pgds = DIV_ROUND_UP((max_pfn << PAGE_SHIFT) , PGDIR_SIZE);
 
@@ -568,16 +555,13 @@ efi_status_t efi_thunk_set_virtual_address_map(
 	efi_sync_low_kernel_mappings();
 	local_irq_save(flags);
 
-	efi_scratch.prev_cr3 = read_cr3();
-	write_cr3((unsigned long)efi_scratch.efi_pgt);
-	__flush_tlb_all();
+	my_switch_mm(&efi_mm);
 
 	func = (u32)(unsigned long)phys_set_virtual_address_map;
 	status = efi64_thunk(func, memory_map_size, descriptor_size,
 			     descriptor_version, virtual_map);
 
-	write_cr3(efi_scratch.prev_cr3);
-	__flush_tlb_all();
+	my_switch_mm(temp_mm);
 	local_irq_restore(flags);
 
 	return status;
