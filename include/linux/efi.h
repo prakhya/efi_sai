@@ -916,6 +916,7 @@ extern struct efi {
 } efi;
 
 extern struct mm_struct efi_mm;
+extern struct mm_struct my_efi_mm;
 
 static inline int
 efi_guidcmp (efi_guid_t left, efi_guid_t right)

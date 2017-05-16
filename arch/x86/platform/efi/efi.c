@@ -52,6 +52,16 @@
 #include <asm/tlbflush.h>
 #include <asm/x86_init.h>
 #include <asm/uv/uv.h>
+#include <asm/mmu_context.h>
+
+struct mm_struct my_efi_mm = {
+       .mm_rb                  = RB_ROOT,
+       .mm_users               = ATOMIC_INIT(2),
+       .mm_count               = ATOMIC_INIT(1),
+       .mmap_sem               = __RWSEM_INITIALIZER(efi_mm.mmap_sem),
+       .page_table_lock        = __SPIN_LOCK_UNLOCKED(efi_mm.page_table_lock),
+       .mmlist                 = LIST_HEAD_INIT(efi_mm.mmlist),
+};
 
 static struct efi efi_phys __initdata;
 static efi_system_table_t efi_systab __initdata;
@@ -1016,10 +1026,59 @@ static void __init __efi_enter_virtual_mode(void)
 	efi_delete_dummy_variable();
 }
 
+void __init my_efi_dump_pagetable(pgd_t *pgd)
+{
+#ifdef CONFIG_EFI_PGT_DUMP
+	if (efi_enabled(EFI_OLD_MEMMAP))
+		ptdump_walk_pgd_level(NULL, swapper_pg_dir);
+	else
+		ptdump_walk_pgd_level(NULL, pgd);
+#endif
+}
+
+static void __init efi_print_md(efi_memory_desc_t *md, int md_count)
+{
+	char buf[64];
+
+	pr_info("mem%02u: %s range=[0x%016llx-0x%016llx] (%lluMB) virt_addr=0x%016llx\n",
+		md_count, efi_md_typeattr_format(buf, sizeof(buf), md),
+		md->phys_addr,
+		md->phys_addr + (md->num_pages << EFI_PAGE_SHIFT) - 1,
+		(md->num_pages >> (20 - EFI_PAGE_SHIFT)),
+		md->virt_addr);
+}
+
+static void __init __my_efi_enter_virtual_mode(void)
+{
+	efi_memory_desc_t *md;
+	bool systab_found;
+	int md_count;
+
+	my_efi_mm.pgd = pgd_alloc(&my_efi_mm);
+	mm_init_cpumask(&my_efi_mm);
+	init_new_context(NULL, &my_efi_mm);
+
+	systab_found = false;
+	md_count = 0;
+
+	for_each_efi_memory_desc(md) {
+
+		if (!(md->attribute & EFI_MEMORY_RUNTIME))
+			continue;
+
+		efi_print_md(md, md_count);
+		md_count++;
+	}
+
+	my_efi_dump_pagetable(my_efi_mm.pgd);
+}
+
 void __init efi_enter_virtual_mode(void)
 {
 	if (efi_enabled(EFI_PARAVIRT))
 		return;
+
+	__my_efi_enter_virtual_mode();
 
 	if (efi_setup)
 		kexec_enter_virtual_mode();
