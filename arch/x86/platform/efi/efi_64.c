@@ -80,9 +80,8 @@ pgd_t * __init efi_call_phys_prolog(void)
 	int n_pgds, i, j;
 
 	if (!efi_enabled(EFI_OLD_MEMMAP)) {
-		save_pgd = (pgd_t *)read_cr3();
-		write_cr3((unsigned long)efi_scratch.efi_pgt);
-		goto out;
+		efi_switch_to_efi_mm();
+		return NULL;
 	}
 
 	early_code_mapping_set_exec(1);
@@ -152,8 +151,7 @@ void __init efi_call_phys_epilog(pgd_t *save_pgd)
 	pud_t *pud;
 
 	if (!efi_enabled(EFI_OLD_MEMMAP)) {
-		write_cr3((unsigned long)save_pgd);
-		__flush_tlb_all();
+		efi_switch_from_efi_mm();
 		return;
 	}
 
@@ -336,8 +334,6 @@ int __init efi_setup_page_tables(unsigned long pa_memmap, unsigned num_pages)
 	if (efi_enabled(EFI_OLD_MEMMAP))
 		return 0;
 
-	efi_scratch.efi_pgt = (pgd_t *)__pa(pgd);
-
 	/*
 	 * It can happen that the physical address of new_memmap lands in memory
 	 * which is not mapped in the EFI page table. Therefore we need to go
@@ -349,8 +345,6 @@ int __init efi_setup_page_tables(unsigned long pa_memmap, unsigned num_pages)
 		pr_err("Error ident-mapping new memmap (0x%lx)!\n", pa_memmap);
 		return 1;
 	}
-
-	efi_scratch.use_pgd = true;
 
 	/*
 	 * Certain firmware versions are way too sentimential and still believe
@@ -596,6 +590,97 @@ void __init efi_dump_pagetable(void)
 #endif
 }
 
+/* Switches calling thread to efi_mm */
+void efi_switch_to_efi_mm()
+{
+    local_irq_disable();
+    task_lock(current);
+
+    if (current->mm) {
+		/*
+		 * Real address space:
+		 * -------------------
+		 * current->mm == current->active_mm
+		 *
+		 * We are in "Real address space", so
+		 * 1. Dec current->active_mm.mm_count, since we are switching
+		 * away from this mm.
+		 * 2. Update current->active_mm to be efi_mm but don't inc
+		 * efi_mm.mm_count as we aren't decrementing it either.
+		 * 3. Switch to efi_mm, but provide prev_mm argument as current->mm
+		 * instead of current->active_mm because
+		 * current->mm == current->active_mm
+		 */
+		mmdrop(current->active_mm);
+		current->active_mm = &efi_mm;
+		switch_mm(current->mm, &efi_mm, NULL);
+	}
+	else {
+		/*
+		 * Anonymous address space:
+		 * ------------------------
+		 * current->mm is NULL
+		 * current->active_mm is init_mm
+		 *
+		 * We are in "Anonymous address space", so don't dec
+		 * current->active_mm.mm_count as active_mm is init_mm and we
+		 * should never free init_mm.
+		 * 1. Update current->active_mm to be efi_mm but don't inc
+		 * efi_mm.mm_count as we aren't decrementing it either.
+		 * 2. Switch to efi_mm from init_mm as
+		 * current->active_mm was init_mm (before step 1)
+		 */
+		current->active_mm = &efi_mm;
+		switch_mm(&init_mm, &efi_mm, NULL);
+	}
+    task_unlock(current);
+}
+
+/* Switches calling thread to current->mm or init_mm from efi_mm */
+void efi_switch_from_efi_mm()
+{
+    task_lock(current);
+
+    if (current->mm) {
+		/*
+		 * Real address space:
+		 * -------------------
+		 * current->mm is Untouched
+		 * current->active_mm is efi_mm
+		 *
+		 * We are in "Real address space", so
+		 * 1. Update current->active_mm to be current->mm, as this will
+		 * bring us back to original state of (current->mm == current->active_mm)
+		 * 2. Inc current->active_mm.mm_count as we are switching back
+		 * to this mm.
+		 * 3. Switch from efi_mm to current->active_mm but don't dec
+		 * efi_mm.mm_count as we should never free this mm.
+		 */
+		current->active_mm = current->mm;
+		mmgrab(current->active_mm);
+		switch_mm(&efi_mm, current->active_mm, NULL);
+	}
+	else {
+		/*
+		 * Anonymous address space:
+		 * ------------------------
+		 * current->mm is NULL
+		 * current->active_mm is efi_mm
+		 *
+		 * We are in "Anonymous address space". Don't dec
+		 * efi_mm.mm_count and don't inc init_mm.mm_count (we will
+		 * never free these two mm's)
+		 * 1. Update current->active_mm to be init_mm (get back to
+		 * original stage)
+		 * 2. Switch to init_mm from efi_mm
+		 */
+		current->active_mm = &init_mm;
+		switch_mm(&efi_mm, &init_mm, NULL);
+	}
+    task_unlock(current);
+    local_irq_enable();
+}
+
 #ifdef CONFIG_EFI_MIXED
 extern efi_status_t efi64_thunk(u32, ...);
 
@@ -649,17 +734,13 @@ efi_status_t efi_thunk_set_virtual_address_map(
 	efi_sync_low_kernel_mappings();
 	local_irq_save(flags);
 
-	efi_scratch.prev_cr3 = read_cr3();
-	write_cr3((unsigned long)efi_scratch.efi_pgt);
-	__flush_tlb_all();
+	efi_switch_to_efi_mm();
 
 	func = (u32)(unsigned long)phys_set_virtual_address_map;
 	status = efi64_thunk(func, memory_map_size, descriptor_size,
 			     descriptor_version, virtual_map);
 
-	write_cr3(efi_scratch.prev_cr3);
-	__flush_tlb_all();
-	local_irq_restore(flags);
+	efi_switch_from_efi_mm();
 
 	return status;
 }
